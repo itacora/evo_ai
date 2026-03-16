@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+venv/
+.venv/
+.env/
+.conda/
+env/
+ENV/
+
+# PyTorch
+*.pth
+*.pt
+*.ckpt
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Other
+*.log
