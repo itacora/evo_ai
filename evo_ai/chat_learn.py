@@ -6,35 +6,51 @@ from evolution import GeneticAlgorithm
 from utils import CharTokenizer
 
 def main():
+    import os
     # 1. Setup
     tokenizer = CharTokenizer()
     print(f"Vocab Size: {tokenizer.vocab_size}")
-    
-    # Config for text model
-    # Slightly larger than numeric model to handle characters
-    config = ModelConfig(vocab_size=tokenizer.vocab_size, 
-                         block_size=32, # Length of context
-                         n_layer=2, 
-                         n_head=2, 
-                         n_embd=32)
-    
+
+    # デフォルト config
+    block_size = 32
+    n_layer    = 2
+    n_head     = 2
+    n_embd     = 32
+
+    # チェックポイントに config があればそちらを優先
+    if os.path.exists("chat_model.pth"):
+        ckpt = torch.load("chat_model.pth", map_location="cpu")
+        if isinstance(ckpt, dict) and "config" in ckpt:
+            c = ckpt["config"]
+            n_layer    = c["n_layer"]
+            n_head     = c["n_head"]
+            n_embd     = c["n_embd"]
+            block_size = c["block_size"]
+            print(f"Checkpoint config: n_layer={n_layer}, n_head={n_head}, n_embd={n_embd}")
+
+    config = ModelConfig(vocab_size=tokenizer.vocab_size,
+                         block_size=block_size,
+                         n_layer=n_layer,
+                         n_head=n_head,
+                         n_embd=n_embd)
+
     # Device
     if torch.backends.mps.is_available():
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
-        
+
     # Initialize Template
     model = EvoTransformer(config).to(device)
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters())}")
-    
+
     # Try to load existing chat model
-    import os
     if os.path.exists("chat_model.pth"):
         print("Found existing 'chat_model.pth'. Resuming training...")
         try:
-            state_dict = torch.load("chat_model.pth", map_location=device)
-            model.load_state_dict(state_dict)
+            ckpt = torch.load("chat_model.pth", map_location=device)
+            state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+            model.load_state_dict(state)
             print("Successfully loaded model.")
         except Exception as e:
             print(f"Error loading model: {e}. Starting from scratch.")
@@ -135,11 +151,13 @@ def main():
         
         # Optional: Save every 5 gens
         if generation % 5 == 0:
-            torch.save(ga.population[0], "chat_model.pth")
+            ckpt = {"model": ga.population[0], "config": {"vocab_size": config.vocab_size, "block_size": config.block_size, "n_layer": config.n_layer, "n_head": config.n_head, "n_embd": config.n_embd}}
+            torch.save(ckpt, "chat_model.pth")
             print("Model saved to chat_model.pth")
 
     # Save on exit
-    torch.save(ga.population[0], "chat_model.pth")
+    ckpt = {"model": ga.population[0], "config": {"vocab_size": config.vocab_size, "block_size": config.block_size, "n_layer": config.n_layer, "n_head": config.n_head, "n_embd": config.n_embd}}
+    torch.save(ckpt, "chat_model.pth")
     print("Model saved. Goodbye!")
 
 if __name__ == "__main__":

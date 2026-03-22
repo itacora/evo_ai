@@ -10,32 +10,32 @@ class CausalSelfAttention(nn.Module):
         self.n_embd = config.n_embd
         self.head_dim = self.n_embd // self.n_head
         assert self.n_embd % self.n_head == 0
-        
+
         # Key, Query, Value projections
         self.c_attn = nn.Linear(self.n_embd, 3 * self.n_embd, bias=False)
         # Output projection
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        
+
         # Causal mask
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x):
         B, T, C = x.size() # Batch, Time, Channels
-        
+
         # Calculate query, key, values for all heads in batch and move head forward to be the batch dim
         q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        
+
         k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2) # (B, nh, T, hs)
-        
+
         # Casual Attention: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        
+
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         y = self.c_proj(y)
         return y
@@ -78,7 +78,7 @@ class EvoTransformer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        
+
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
@@ -86,7 +86,7 @@ class EvoTransformer(nn.Module):
             ln_f = nn.LayerNorm(config.n_embd),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        
+
         # Init weights
         self.apply(self._init_weights)
 
@@ -104,21 +104,21 @@ class EvoTransformer(nn.Module):
     def forward(self, idx):
         device = idx.device
         b, t = idx.size()
-        
+
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        
+
         pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # (1, t)
-        
+
         tok_emb = self.transformer.wte(idx) # (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # (1, t, n_embd)
         x = tok_emb + pos_emb
-        
+
         for block in self.transformer.h:
             x = block(x)
-            
+
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
-        
+
         return logits
 
     def generate(self, idx, max_new_tokens):
@@ -128,10 +128,10 @@ class EvoTransformer(nn.Module):
             idx_cond = idx[:, -self.config.block_size:]
             logits = self(idx_cond)
             # Focus only on legits at the last time step
-            logits = logits[:, -1, :] 
+            logits = logits[:, -1, :]
             # Apply softmax
             probs = F.softmax(logits, dim=-1)
-            # Sample (or greedy) - Using argmax for deterministic "solution" finding usually in simple tasks, 
+            # Sample (or greedy) - Using argmax for deterministic "solution" finding usually in simple tasks,
             # but for evolution usually determinstic policy is easier to evaluate.
             # Let's simple argmax for now to reduce variance in evaluation.
             idx_next = torch.argmax(probs, dim=-1, keepdim=True)

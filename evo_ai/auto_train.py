@@ -2,38 +2,58 @@ import torch
 import copy
 import random
 import time
+import signal
 from model import EvoTransformer, ModelConfig
 from evolution import GeneticAlgorithm
 from utils import CharTokenizer
 from judge import LLMJudge
 
 def main():
+    import os
     # 1. Setup
     tokenizer = CharTokenizer()
-    
-    config = ModelConfig(vocab_size=tokenizer.vocab_size, 
-                         block_size=32, 
-                         n_layer=2, 
-                         n_head=2, 
-                         n_embd=32)
-    
+
+    # デフォルト config
+    block_size = 32
+    n_layer    = 2
+    n_head     = 2
+    n_embd     = 32
+
+    # チェックポイントに config があればそちらを優先
+    if os.path.exists("chat_model.pth"):
+        ckpt = torch.load("chat_model.pth", map_location="cpu")
+        if isinstance(ckpt, dict) and "config" in ckpt:
+            c = ckpt["config"]
+            n_layer    = c["n_layer"]
+            n_head     = c["n_head"]
+            n_embd     = c["n_embd"]
+            block_size = c["block_size"]
+            print(f"Checkpoint config: n_layer={n_layer}, n_head={n_head}, n_embd={n_embd}")
+
+    config = ModelConfig(vocab_size=tokenizer.vocab_size,
+                         block_size=block_size,
+                         n_layer=n_layer,
+                         n_head=n_head,
+                         n_embd=n_embd)
+
     # Device
     if torch.backends.mps.is_available():
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
-        
+
     # Initialize Template
     model = EvoTransformer(config).to(device)
-    
+
     # Load existing if available
-    import os
     if os.path.exists("chat_model.pth"):
         print("Resuming from chat_model.pth...")
         try:
-            model.load_state_dict(torch.load("chat_model.pth", map_location=device))
-        except:
-            print("Failed to load. Starting fresh.")
+            ckpt = torch.load("chat_model.pth", map_location=device)
+            state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+            model.load_state_dict(state)
+        except Exception as e:
+            print(f"Failed to load ({e}). Starting fresh.")
     
     # Initialize GA (Small population for speed with Judge)
     ga = GeneticAlgorithm(model, pop_size=20, mutation_rate=0.05, mutation_power=0.02, device=device)
@@ -55,12 +75,22 @@ def main():
     
     print("\n--- Automated Evolutionary Learning ---")
     print("Judge Model will supervise the training.")
-    print("Press Ctrl+C to stop.")
-    
+    print("Press Ctrl+C to stop and save.")
+
+    stop_requested = False
+
+    def handle_stop(sig, frame):
+        nonlocal stop_requested
+        print("\nStop requested. Saving after this generation...")
+        stop_requested = True
+
+    signal.signal(signal.SIGINT, handle_stop)
+    signal.signal(signal.SIGTERM, handle_stop)
+
     generation = 0
     start_time = time.time()
-    
-    while True:
+
+    while not stop_requested:
         generation += 1
         
         # 1. Pick a prompt
@@ -103,8 +133,13 @@ def main():
         
         # Save occasionally
         if generation % 10 == 0:
-            torch.save(ga.population[0], "chat_model.pth")
+            ckpt = {"model": ga.population[0], "config": {"vocab_size": config.vocab_size, "block_size": config.block_size, "n_layer": config.n_layer, "n_head": config.n_head, "n_embd": config.n_embd}}
+            torch.save(ckpt, "chat_model.pth")
             print(f"Saved (Time: {time.time()-start_time:.1f}s)")
+
+    ckpt = {"model": ga.population[0], "config": {"vocab_size": config.vocab_size, "block_size": config.block_size, "n_layer": config.n_layer, "n_head": config.n_head, "n_embd": config.n_embd}}
+    torch.save(ckpt, "chat_model.pth")
+    print(f"Model saved to chat_model.pth (Total generations: {generation})")
 
 if __name__ == "__main__":
     main()

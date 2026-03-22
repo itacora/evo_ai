@@ -25,3 +25,6 @@ ENV/
 
 # Other
 *.log
+
+# Auto-downloaded datasets (re-downloaded automatically on first run)
+evo_ai/tinyshakespeare.txt
